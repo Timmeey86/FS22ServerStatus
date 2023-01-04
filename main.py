@@ -5,6 +5,7 @@ import xmltodict
 import asyncio
 import datetime
 from serverconfiguration import ServerConfiguration
+from serverstatusinfo import ServerStatus, PlayerStatus
 from replit import db
 from discord import app_commands
 
@@ -45,7 +46,7 @@ async def fss_add(interaction, ip: str, port: str, code: str):
   new_server_config.set_status_embed(message.channel.id, message.id)
 
   # Store the server description in the cache and in the database
-  serverConfigs[new_server_config.identifier] = new_server_config  
+  serverConfigs[new_server_config.identifier] = new_server_config
   db["servers"][new_server_config.identifier] = vars(new_server_config)
 
   # Confirm the successful creation of the embed
@@ -160,35 +161,38 @@ async def update_status_embeds():
   """
   await client.wait_until_ready()
   while not client.is_closed():
-    serverData = await get_status()
-    for entry in serverData:
-      print("Trying to find embed for %s" % entry["Name"])
+    serverStatus = await get_server_status()
+    for serverData in serverStatus:
+      print("Trying to find embed for %s" % serverData.name)
+      serverConfig = serverData.serverConfig
+
       # Try finding the message for the embed
       try:
-        channel = client.get_channel(entry["ChannelId"])
-        embedMessage = await channel.fetch_message(entry["EmbedId"])
+        channel = client.get_channel(serverConfig.statusChannelId)
+        embedMessage = await channel.fetch_message(serverConfig.statusEmbedId)
       except:
-        print("WARN: Could not find embed for server %s." % (entry["Name"]))
+        print("WARN: Could not find embed for server %s." %
+              (serverData.serverConfig.name))
         continue
 
       # Build the description
       replyMessage = \
-        "**Name: **" + entry["Name"] + "\r\n" + \
-        "**Map: **" + entry["Map"] + "\r\n" + \
-        "**Status: **" + entry["Status"] + "\r\n" + \
-        "**Mods Link: **" + entry["Mods Link"] + "\r\n" + \
-        "**Players Online: **" + entry["Players Online"] + "\r\n" + \
+        "**Name: **" + serverData.name + "\r\n" + \
+        "**Map: **" + serverData.map + "\r\n" + \
+        "**Status: **" + serverData.status + "\r\n" + \
+        "**Mods Link: **" + serverData.mods_link() + "\r\n" + \
+        "**Players Online: **" + str(serverData.online_player_count()) + "/" + serverData.maxPlayers + "\r\n" + \
         "**Players: **"
-      players = entry["Players"]
-      if not players:
+
+      if not serverData.players:
         replyMessage = replyMessage + "(none)"
       else:
-        for player in players:
-          replyMessage = replyMessage + "\r\n- " + player
+        for playerName in serverData.players:
+          replyMessage = replyMessage + "\r\n- " + playerName
 
       # Update the embed
-      print("Updating embed for %s" % entry["Name"])
-      embed = discord.Embed(title=entry["Name"], description=replyMessage)
+      print("Updating embed for %s" % serverData.name)
+      embed = discord.Embed(title=serverData.name, description=replyMessage)
       embed.add_field(name="Last Update", value="%s" % datetime.datetime.now())
       await embedMessage.edit(embed=embed)
 
@@ -199,54 +203,7 @@ async def update_status_embeds():
     await asyncio.sleep(60)
 
 
-async def set_player_online(server, serverName, playerName):
-  """
-  Remembers that a player is online on the given server and writes a message if they were offline on that server before
-  """
-
-  # get or create data for the current server
-  if players.get(serverName) == None:
-    players[serverName] = {}
-  playersKnownByServer = players[serverName]
-
-  # get or create data for the current player on that server
-  if playersKnownByServer.get(playerName) == None:
-    playersKnownByServer[playerName] = {"online": False}
-  playerDetails = playersKnownByServer[playerName]
-
-  # Check if the player was online already
-  if playerDetails["online"] == False:
-    playerDetails["online"] = True
-    print("Player %s is now online on %s" % (playerName, serverName))
-    if server.has_member_log_channel():
-      channel = client.get_channel(server.memberLogChannelId)
-      await channel.send(content="%s is now online on %s" %
-                         (playerName, serverName))
-
-  db["players"] = players
-
-
-async def set_players_offline(server, serverName, onlinePlayerNames):
-  print(onlinePlayerNames)
-
-  playersKnownByServer = players.get(serverName)
-  if playersKnownByServer == None:
-    return
-
-  for playerName in playersKnownByServer:
-    if playerName not in onlinePlayerNames and playersKnownByServer[
-        playerName]["online"] == True:
-      print("Player %s is no longer on %s" % (playerName, serverName))
-      playersKnownByServer[playerName]["online"] = False
-      if server.has_member_log_channel():
-        channel = client.get_channel(server.memberLogChannelId)
-        await channel.send(content="%s signed out of %s" %
-                           (playerName, serverName))
-
-  db["players"] = players
-
-
-async def get_status():
+async def get_server_status():
   """
   Retrieves the server status from each server
   """
@@ -256,51 +213,58 @@ async def get_status():
   allServersData = []
   for identifier in serverConfigs:
     print("Processing server %s" % identifier)
-    server = serverConfigs[identifier]
-    serverData = {}
-    serverData["Status"] = "Online"
-    serverData["Mods Link"] = "%s:%s/mods.html" % (server.ip, server.port)
-    serverData["Players"] = []
-    onlinePlayers = []
+    serverConfig = serverConfigs[identifier]
+    serverData = serverStatus[identifier]
+
+    # Retrieve the server XML
     try:
-      url = "http://%s:%s/feed/dedicated-server-stats.xml?code=%s" % (
-        server.ip, server.port, server.apiCode)
+      url = serverData.status_xml_url()
       print("Connecting to %s" % url)
       response = http.request('GET', url, timeout=urllib3.util.Timeout(2))
     except:
       print("Failed connecting to %s" % url)
+      serverData.set_offline()
       continue
-      
+
+    # Parse data from the server XML
     try:
       data = xmltodict.parse(response.data)
     except:
       print("Failed parsing XML data from %s" % url)
-      continue 
-        
-    serverElement = data["Server"]
-    serverData["Name"] = serverElement["@name"]
-    serverData["Map"] = serverElement["@mapName"]
-    serverData["Players Online"] = "%s/%s" % (
-      serverElement["Slots"]["@numUsed"],
-      serverElement["Slots"]["@capacity"])
-    for playerElement in serverElement["Slots"]["Player"]:
-      if playerElement is not None and playerElement["@isUsed"] == "true":
-        serverData["Players"].append(
-          "%s (%s min)" %
-          (playerElement["#text"], playerElement["@uptime"]))
-        await set_player_online(server, serverData["Name"],
-                                playerElement["#text"])
-        onlinePlayers.append(playerElement["#text"])
-    serverData["EmbedId"] = server.statusEmbedId
-    serverData["ChannelId"] = server.statusChannelId
-    serverData["IP"] = server.ip
-    serverData["Port"] = server.port
+      continue
 
-    await set_players_offline(server, serverData["Name"], onlinePlayers)
+    # Update the cache with the status values
+    serverElement = data["Server"]
+    serverData.update_attributes(
+      status="Online",
+      name=serverElement["@name"],
+      map=serverElement["@mapName"],
+      maxPlayers=serverElement["Slots"]["@capacity"])
+
+    serverData.update_players(serverElement["Slots"]["Player"])
+
+    # Send a message to discord for every recently logged in player
+    for playerStatus in serverData.recentlyLoggedIn:
+      print("Player %s is now online on %s" %
+            (playerStatus.playerName, serverData.name))
+      if serverConfig.has_member_log_channel():
+        channel = client.get_channel(serverConfig.memberLogChannelId)
+        await channel.send(content="%s is now online on %s" %
+                           (playerStatus.playerName, serverData.name))
+
+    # Send a message to discord for every recently logged out player
+    for playerStatus in serverData.recentlyLoggedOut:
+      print("Player %s is no longer on %s" %
+            (playerStatus.playerName, serverData.name))
+      if serverConfig.has_member_log_channel():
+        channel = client.get_channel(serverConfig.memberLogChannelId)
+        await channel.send(content="%s is no longer on %s" %
+                           (playerStatus.playerName, serverData.name))
 
     allServersData.append(serverData)
 
   return allServersData
+
 
 # Build a ditionary of server configuration objects from the database
 if db.get("servers") == None:
@@ -313,10 +277,11 @@ for serverIdentifier in serversInDb:
   serverObj = ServerConfiguration.from_json(serverJson)
   serverConfigs[serverObj.identifier] = serverObj
 
-# Remember player info
-#if db.get("players") == None:
-db["players"] = {}
-players = db["players"]
+# Keep status info only in cache for now
+serverStatus = {}
+for serverIdentifier in serverConfigs:
+  serverStatus[serverIdentifier] = ServerStatus(
+    serverConfigs[serverIdentifier])
 
 # Run the bot
 discord_token = os.environ['DISCORD_TOKEN']
