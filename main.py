@@ -4,6 +4,7 @@ import urllib3
 import xmltodict
 import asyncio
 import datetime
+from serverconfiguration import ServerConfiguration
 from replit import db
 from discord import app_commands
 
@@ -31,26 +32,24 @@ async def fss_add(interaction, ip: str, port: str, code: str):
       "Only administrators are allowed to add servers")
     return
 
-  if any(entry["IP"] == ip and entry["Port"] == port for entry in servers):
-    await interaction.response.send_message(
-      "There already is a panel for %s:%s" % (ip, port))
+  # Currently, only a single panel is allowed per ip:port combination
+  new_server_config = ServerConfiguration(ip, port, code)
+  if new_server_config.identifier in serverConfigs:
+    await interaction.response.send_message("There already is a panel for %s" %
+                                            new_server_config.identifier)
     return
-
-  # Create a server entry
-  serverDesc = {}
-  serverDesc["IP"] = ip
-  serverDesc["Port"] = port
-  serverDesc["Code"] = code
 
   # Create an embed and remember its details
   embed = discord.Embed(title="Pending...")
   message = await interaction.channel.send(embed=embed)
-  serverDesc["ChannelId"] = message.channel.id
-  serverDesc["EmbedId"] = message.id
+  new_server_config.set_status_embed(message.channel.id, message.id)
 
-  # Store the server description in the database
-  servers.append(serverDesc)
+  # Store the server description in the cache and in the database
+  serverConfigs[new_server_config.identifier] = new_server_config  
+  db["servers"][new_server_config.identifier] = vars(new_server_config)
 
+  # Confirm the successful creation of the embed
+  # (only the one who used the slash command will see this, and only for 10 seconds)
   await interaction.response.send_message(content="Successfully added %s:%s" %
                                           (ip, port),
                                           ephemeral=True,
@@ -71,34 +70,35 @@ async def fss_remove(interaction, ip: str, port: str):
       "Only administrators are allowed to remove servers")
     return
 
-  try:
-    await remove_server(ip, port)
-    await interaction.response.send_message("Successfully removed %s:%s" %
-                                            (ip, port))
-  except:
-    await interaction.response.send_message("Could not find %s:%s" % (ip, port)
-                                            )
+  # Check if the server is known at all
+  identifier = ServerConfiguration.build_identifier(ip, port)
+  if identifier not in serverConfigs:
+    print("INFO: Could not find server %s" % identifier)
+    await interaction.response.send_message(
+      content="No server registered for IP %s and port %s" % (ip, port),
+      ephemeral=True,
+      delete_after=10)
+    return
 
-
-async def remove_server(ip, port):
-  """
-  Removes a server entry from the database
-  """
-  serverDesc = next(serverDesc for serverDesc in servers
-                    if serverDesc["IP"] == ip and serverDesc["Port"] == port)
-  if serverDesc.get("EmbedId") is not None:
+  # Remove the status embed if it exists
+  server = serverConfigs[identifier]
+  if server.has_status_embed():
     try:
-      channel = client.get_channel(serverDesc["ChannelId"])
-      embedMessage = await channel.fetch_message(serverDesc["EmbedId"])
+      channel = client.get_channel(server.statusChannelId)
+      embedMessage = await channel.fetch_message(server.statusEmbedId)
       embedMessage.delete()
     except:
-      # Remove the server anyway. The embed has most likely been removed by a discord admin anyway, or the bot is
-      # no longer in the channel, so we can ignore this.
-      print("WARN: Failed to remove embed for %s:%s" % (ip, port))
+      print("WARN: Could not remove embed for IP %s and port %s" % (ip, port))
 
-  servers.remove(serverDesc)
-  db["servers"] = servers
-  print("Removed server %s:%s" % (ip, port))
+  # Remove the server from the cache and database
+  del serverConfigs[identifier]
+  del db["servers"][identifier]
+
+  print("INFO: Removed server %s" % identifier)
+  await interaction.response.send_message(
+    content="Successfully removed server %s" % identifier,
+    ephemeral=True,
+    delete_after=10)
 
 
 @tree.command(
@@ -117,20 +117,24 @@ async def fss_enable_member_log(interaction, ip: str, port: str):
       "Only administrators are allowed to run commands on this bot")
     return
 
-  serverDesc = next(serverDesc for serverDesc in servers
-                    if serverDesc["IP"] == ip and serverDesc["Port"] == port)
-  if serverDesc is not None:
-    serverDesc["MemberLogChannelId"] = interaction.channel_id
+  # Check if the given server is known at all
+  identifier = ServerConfiguration.build_identifier(ip, port)
+  if identifier not in serverConfigs:
     await interaction.response.send_message(
-      content="Activated member log messages for %s:%s" % (ip, port),
+      content="No server registered for IP %s and port %s" % (ip, port),
       ephemeral=True,
       delete_after=10)
-    db["servers"]=servers
-  else:
-    await interaction.response.send_message(
-      content="Nothing registered for %s:%s" % (ip, port),
-      ephemeral=True,
-      delete_after=10)
+    return
+
+  server = serverConfigs[identifier]
+  server.set_member_log_channel(interaction.channel_id)
+  await interaction.response.send_message(
+    content="Activated member log messages for %s" % identifier,
+    ephemeral=True,
+    delete_after=10)
+
+  # Update the database
+  db["servers"][server.identifier] = vars(server)
 
 
 @client.event
@@ -158,6 +162,7 @@ async def update_status_embeds():
   while not client.is_closed():
     serverData = await get_status()
     for entry in serverData:
+      print("Trying to find embed for %s" % entry["Name"])
       # Try finding the message for the embed
       try:
         channel = client.get_channel(entry["ChannelId"])
@@ -213,11 +218,11 @@ async def set_player_online(server, serverName, playerName):
   if playerDetails["online"] == False:
     playerDetails["online"] = True
     print("Player %s is now online on %s" % (playerName, serverName))
-    channelId = server.get("MemberLogChannelId")
-    if channelId is not None:
-      channel = client.get_channel(channelId)
-      await channel.send(content="%s is now online on %s" % (playerName, serverName))
-    
+    if server.has_member_log_channel():
+      channel = client.get_channel(server.memberLogChannelId)
+      await channel.send(content="%s is now online on %s" %
+                         (playerName, serverName))
+
   db["players"] = players
 
 
@@ -229,13 +234,14 @@ async def set_players_offline(server, serverName, onlinePlayerNames):
     return
 
   for playerName in playersKnownByServer:
-    if playerName not in onlinePlayerNames and playersKnownByServer[playerName]["online"] == True:
+    if playerName not in onlinePlayerNames and playersKnownByServer[
+        playerName]["online"] == True:
       print("Player %s is no longer on %s" % (playerName, serverName))
       playersKnownByServer[playerName]["online"] = False
-      channelId = server.get("MemberLogChannelId")
-      if channelId is not None:
-        channel = client.get_channel(channelId)
-        await channel.send(content="%s signed out of %s" % (playerName, serverName))
+      if server.has_member_log_channel():
+        channel = client.get_channel(server.memberLogChannelId)
+        await channel.send(content="%s signed out of %s" %
+                           (playerName, serverName))
 
   db["players"] = players
 
@@ -246,50 +252,49 @@ async def get_status():
   """
   http = urllib3.PoolManager()
 
+  print("Reading status from each server")
   allServersData = []
-  for server in servers:
-    print("Processing server %s:%s" % (server["IP"], server["Port"]))
+  for identifier in serverConfigs:
+    print("Processing server %s" % identifier)
+    server = serverConfigs[identifier]
     serverData = {}
     serverData["Status"] = "Online"
-    serverData["Mods Link"] = "%s:%s/mods.html" % (server["IP"],
-                                                   server["Port"])
+    serverData["Mods Link"] = "%s:%s/mods.html" % (server.ip, server.port)
     serverData["Players"] = []
     onlinePlayers = []
     try:
       url = "http://%s:%s/feed/dedicated-server-stats.xml?code=%s" % (
-        server["IP"], server["Port"], server["Code"])
+        server.ip, server.port, server.apiCode)
       print("Connecting to %s" % url)
       response = http.request('GET', url, timeout=urllib3.util.Timeout(2))
-      try:
-        data = xmltodict.parse(response.data)
-        serverElement = data["Server"]
-        serverData["Name"] = serverElement["@name"]
-        serverData["Map"] = serverElement["@mapName"]
-        serverData["Players Online"] = "%s/%s" % (
-          serverElement["Slots"]["@numUsed"],
-          serverElement["Slots"]["@capacity"])
-        for playerElement in serverElement["Slots"]["Player"]:
-          if playerElement is not None and playerElement["@isUsed"] == "true":
-            serverData["Players"].append(
-              "%s (%s min)" %
-              (playerElement["#text"], playerElement["@uptime"]))
-            await set_player_online(server, serverData["Name"], playerElement["#text"])
-            onlinePlayers.append(playerElement["#text"])
-        serverData["EmbedId"] = server["EmbedId"]
-        serverData["ChannelId"] = server["ChannelId"]
-        serverData["IP"] = server["IP"]
-        serverData["Port"] = server["Port"]
-      except:
-        print("Failed to parse data")
-        serverData["Name"] = "Unknown"
-        serverData["Map"] = "Unknown"
-        serverData["Players Online"] = "Unknown"
     except:
-      print("Failed to connect to %s" % url)
-      serverData["Status"] = "Unreachable"
-      serverData["Name"] = "Unknown"
-      serverData["Map"] = "Unknown"
-      serverData["Players Online"] = "Unknown"
+      print("Failed connecting to %s" % url)
+      continue
+      
+    try:
+      data = xmltodict.parse(response.data)
+    except:
+      print("Failed parsing XML data from %s" % url)
+      continue 
+        
+    serverElement = data["Server"]
+    serverData["Name"] = serverElement["@name"]
+    serverData["Map"] = serverElement["@mapName"]
+    serverData["Players Online"] = "%s/%s" % (
+      serverElement["Slots"]["@numUsed"],
+      serverElement["Slots"]["@capacity"])
+    for playerElement in serverElement["Slots"]["Player"]:
+      if playerElement is not None and playerElement["@isUsed"] == "true":
+        serverData["Players"].append(
+          "%s (%s min)" %
+          (playerElement["#text"], playerElement["@uptime"]))
+        await set_player_online(server, serverData["Name"],
+                                playerElement["#text"])
+        onlinePlayers.append(playerElement["#text"])
+    serverData["EmbedId"] = server.statusEmbedId
+    serverData["ChannelId"] = server.statusChannelId
+    serverData["IP"] = server.ip
+    serverData["Port"] = server.port
 
     await set_players_offline(server, serverData["Name"], onlinePlayers)
 
@@ -297,11 +302,16 @@ async def get_status():
 
   return allServersData
 
-
-# Retrieve the current list of servers
+# Build a ditionary of server configuration objects from the database
 if db.get("servers") == None:
-  db["servers"] = []
-servers = db["servers"]
+  db["servers"] = {}
+
+serversInDb = db["servers"]
+serverConfigs = {}
+for serverIdentifier in serversInDb:
+  serverJson = serversInDb[serverIdentifier]
+  serverObj = ServerConfiguration.from_json(serverJson)
+  serverConfigs[serverObj.identifier] = serverObj
 
 # Remember player info
 #if db.get("players") == None:
