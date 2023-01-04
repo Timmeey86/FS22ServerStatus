@@ -34,7 +34,6 @@ class ServerStatus:
     self.name = name
     self.map = map
     self.maxPlayers = maxPlayers
-    self.players = {}
 
   def set_offline(self):
     self.status = "Offline"
@@ -60,9 +59,9 @@ class ServerStatus:
       onlinePlayers[player.playerName] = player
 
     # Find out which players just signed out
-    for player in self.players:
-      if player.playerName not in onlinePlayers:
-        self.recentlyLoggedOut.append(player)
+    for playerName in self.players:
+      if playerName not in onlinePlayers:
+        self.recentlyLoggedOut.append(self.players[playerName])
 
     # Store the new dictionary of online players
     self.players = onlinePlayers
