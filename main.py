@@ -278,10 +278,16 @@ async def get_server_status():
 
     # Check if the server is offline (but the host is online. In this case we get an empty XML):    
     serverElement = data["Server"]
+    justTurnedOffline = False
+    justTurnedOnline = False
     if "@name" not in serverElement:
+      if serverData.is_online():
+        justTurnedOffline = True
       serverData.set_offline()
       serverData.update_players([])
     else:
+      if not serverData.is_online():
+        justTurnedOnline = True
       # Update the cache with the status values
       serverData.update_attributes(
         status="Online",
@@ -296,6 +302,12 @@ async def get_server_status():
     else:
       channel = None
 
+    # Send a message if the server just went online (before the player list)
+    if justTurnedOnline:
+      print("Server %s is now online" % serverData.name)
+      if channel is not None:
+        await channel.send(content="🟢 %s is now online" % serverData.name)
+      
     # Send a message to discord for every recently logged in player
     for playerStatus in serverData.recentlyLoggedIn:
       print("Player %s is now online on %s" %
@@ -319,6 +331,12 @@ async def get_server_status():
       if channel is not None:
         await channel.send(content="%s is now an admin on %s" %
                            (playerStatus.playerName, serverData.name))
+        
+    # Send a message if the server just went offline (after the player list)
+    if justTurnedOffline:
+      print("Server %s is now offline" % serverData.name)
+      if channel is not None:
+        await channel.send(content="🔴 %s is now offline" % serverData.name)
 
     # Update the voice channel name
     print("Updating voice channel for %s?: %s, %s" %
@@ -326,6 +344,7 @@ async def get_server_status():
            serverData.allows_channel_rename()))
     if serverConfig.has_voice_channel() and serverData.allows_channel_rename():
       try:
+        serverData.update_channel_rename_timestamp()
         voiceChannel = client.get_channel(int(serverConfig.voiceChannelId))
         onlineSign = "🟢" if serverData.is_online() else "🔴"
         await voiceChannel.edit(
