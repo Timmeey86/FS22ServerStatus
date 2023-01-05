@@ -32,7 +32,8 @@ class ServerStatus:
     self.recentlyLoggedIn = []
     self.recentlyLoggedOut = []
     self.recentlyChangedToAdmin = []
-    self.lastChannelRenameTimestamp = datetime.datetime.now() - datetime.timedelta(seconds=400)
+    self.lastChannelRenameTimestamp = datetime.datetime.now(
+    ) - datetime.timedelta(seconds=400)
 
   def update_attributes(self, status, name, map, maxPlayers):
     self.status = status
@@ -52,7 +53,7 @@ class ServerStatus:
             ).total_seconds() > 305  # a bit more than five minutes
 
   def update_channel_rename_timestamp(self):
-    self.lastChannelRenameTimestamp = datetime.datetime.now
+    self.lastChannelRenameTimestamp = datetime.datetime.now()
 
   def update_players(self, playerElements):
     self.recentlyLoggedIn = []
