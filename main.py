@@ -155,6 +155,47 @@ async def on_ready():
   print(client.user)
 
 
+@tree.command(
+  name="fss_register_voice_channel",
+  description=
+  "Makes the bot display the online state and number of online players on a server",
+  guild=discord.Object(id=MY_GUILD))
+@app_commands.describe(
+  ip="The IP of the FS22 server",
+  port="The port of the FS22 server",
+  channel_id="The channel ID of the voice channel (right click -> copy ID)",
+  map_name="A preferrably short name for the map which is hosted on this server"
+)
+async def fss_register_voice_channel(interaction, ip: str, port: str,
+                                     channel_id: str, map_name: str):
+  """
+  Registers a voice channel, which will receive an online/offline icon and the member count in the name
+  """
+  if not interaction.permissions.administrator:
+    await interaction.response.send_message(
+      "Only administrators are allowed to run commands on this bot")
+    return
+
+  # Check if the given server is known at all
+  identifier = ServerConfiguration.build_identifier(ip, port)
+  if identifier not in serverConfigs:
+    await interaction.response.send_message(
+      content="No server registered for IP %s and port %s" % (ip, port),
+      ephemeral=True,
+      delete_after=10)
+    return
+
+  server = serverConfigs[identifier]
+  server.set_voice_channel(channel_id, map_name)
+  await interaction.response.send_message(
+    content="Registered voice channel for %s" % identifier,
+    ephemeral=True,
+    delete_after=10)
+
+  # Update the database
+  db["servers"][server.identifier] = vars(server)
+
+
 async def update_status_embeds():
   """
   Update the registered embeds every minute
@@ -224,6 +265,7 @@ async def get_server_status():
     except:
       print("Failed connecting to %s" % url)
       serverData.set_offline()
+      allServersData.append(serverData)
       continue
 
     # Parse data from the server XML
@@ -231,24 +273,34 @@ async def get_server_status():
       data = xmltodict.parse(response.data)
     except:
       print("Failed parsing XML data from %s" % url)
+      allServersData.append(serverData)
       continue
 
-    # Update the cache with the status values
+    # Check if the server is offline (but the host is online. In this case we get an empty XML):    
     serverElement = data["Server"]
-    serverData.update_attributes(
-      status="Online",
-      name=serverElement["@name"],
-      map=serverElement["@mapName"],
-      maxPlayers=serverElement["Slots"]["@capacity"])
+    if "@name" not in serverElement:
+      serverData.set_offline()
+      serverData.update_players([])
+    else:
+      # Update the cache with the status values
+      serverData.update_attributes(
+        status="Online",
+        name=serverElement["@name"],
+        map=serverElement["@mapName"],
+        maxPlayers=serverElement["Slots"]["@capacity"])
+  
+      serverData.update_players(serverElement["Slots"]["Player"])
 
-    serverData.update_players(serverElement["Slots"]["Player"])
+    if serverConfig.has_member_log_channel():
+      channel = client.get_channel(serverConfig.memberLogChannelId)
+    else:
+      channel = None
 
     # Send a message to discord for every recently logged in player
     for playerStatus in serverData.recentlyLoggedIn:
       print("Player %s is now online on %s" %
             (playerStatus.playerName, serverData.name))
-      if serverConfig.has_member_log_channel():
-        channel = client.get_channel(serverConfig.memberLogChannelId)
+      if channel is not None:
         await channel.send(content="%s is now online on %s" %
                            (playerStatus.playerName, serverData.name))
 
@@ -256,10 +308,34 @@ async def get_server_status():
     for playerStatus in serverData.recentlyLoggedOut:
       print("Player %s is no longer on %s" %
             (playerStatus.playerName, serverData.name))
-      if serverConfig.has_member_log_channel():
-        channel = client.get_channel(serverConfig.memberLogChannelId)
+      if channel is not None:
         await channel.send(content="%s is no longer on %s" %
                            (playerStatus.playerName, serverData.name))
+
+    # Send a message to discord for every player who recently changed to admin
+    for playerStatus in serverData.recentlyChangedToAdmin:
+      print("Player %s is now an admin on %s" %
+            (playerStatus.playerName, serverData.name))
+      if channel is not None:
+        await channel.send(content="%s is now an admin on %s" %
+                           (playerStatus.playerName, serverData.name))
+
+    # Update the voice channel name
+    print("Updating voice channel for %s?: %s, %s" %
+          (serverData.name, serverConfig.has_voice_channel(),
+           serverData.allows_channel_rename()))
+    if serverConfig.has_voice_channel() and serverData.allows_channel_rename():
+      try:
+        voiceChannel = client.get_channel(int(serverConfig.voiceChannelId))
+        onlineSign = "🟢" if serverData.is_online() else "🔴"
+        await voiceChannel.edit(
+          name="%s %s: %s/%s" %
+          (onlineSign, serverConfig.voiceChannelName,
+           serverData.online_player_count(), serverData.maxPlayers))
+      except:
+        print(
+          "WARN: Could not locate or change voice channel %s for server %s" %
+          (serverConfig.voiceChannelId, serverData.name))
 
     allServersData.append(serverData)
 

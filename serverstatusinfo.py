@@ -1,3 +1,6 @@
+import datetime
+
+
 class PlayerStatus:
   """
   Contains information about the current status of a player
@@ -24,10 +27,12 @@ class ServerStatus:
     self.serverConfig = serverConfig
     self.name = "Unknown"
     self.map = "Unknown"
-    self.maxPlayers = 0
+    self.maxPlayers = "0"
     self.players = {}
     self.recentlyLoggedIn = []
     self.recentlyLoggedOut = []
+    self.recentlyChangedToAdmin = []
+    self.lastChannelRenameTimestamp = datetime.datetime.now() - datetime.timedelta(seconds=400)
 
   def update_attributes(self, status, name, map, maxPlayers):
     self.status = status
@@ -38,9 +43,21 @@ class ServerStatus:
   def set_offline(self):
     self.status = "Offline"
 
+  def is_online(self):
+    return self.status != "Offline"
+
+  def allows_channel_rename(self):
+    """Makes sure we are not being rate limited by discord when renaming a channel"""
+    return (datetime.datetime.now() - self.lastChannelRenameTimestamp
+            ).total_seconds() > 305  # a bit more than five minutes
+
+  def update_channel_rename_timestamp(self):
+    self.lastChannelRenameTimestamp = datetime.datetime.now
+
   def update_players(self, playerElements):
     self.recentlyLoggedIn = []
     self.recentlyLoggedOut = []
+    self.recentlyChangedToAdmin = []
     onlinePlayers = {}
 
     for playerElement in playerElements:
@@ -57,6 +74,12 @@ class ServerStatus:
 
       # Remember all players who are online now
       onlinePlayers[player.playerName] = player
+
+      # Find out which players are now an admin
+      if player.isAdmin == "true":
+        if player.playerName not in self.players or self.players[
+            player.playerName].isAdmin != "true":
+          self.recentlyChangedToAdmin.append(player)
 
     # Find out which players just signed out
     for playerName in self.players:
