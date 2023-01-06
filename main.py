@@ -204,7 +204,6 @@ async def update_status_embeds():
   while not client.is_closed():
     serverStatus = await get_server_status()
     for serverData in serverStatus:
-      print("Trying to find embed for %s" % serverData.name)
       serverConfig = serverData.serverConfig
 
       # Try finding the message for the embed
@@ -232,7 +231,6 @@ async def update_status_embeds():
           replyMessage = replyMessage + "\r\n- " + playerName
 
       # Update the embed
-      print("Updating embed for %s" % serverData.name)
       embed = discord.Embed(title=serverData.name, description=replyMessage)
       embed.add_field(name="Last Update", value="%s" % datetime.datetime.now())
       await embedMessage.edit(embed=embed)
@@ -250,17 +248,14 @@ async def get_server_status():
   """
   http = urllib3.PoolManager()
 
-  print("Reading status from each server")
   allServersData = []
   for identifier in serverConfigs:
-    print("Processing server %s" % identifier)
     serverConfig = serverConfigs[identifier]
     serverData = serverStatus[identifier]
 
     # Retrieve the server XML
     try:
       url = serverData.status_xml_url()
-      print("Connecting to %s" % url)
       response = http.request('GET', url, timeout=urllib3.util.Timeout(2))
     except:
       print("Failed connecting to %s" % url)
@@ -339,9 +334,6 @@ async def get_server_status():
         await channel.send(content="🔴 %s is now offline" % serverData.name)
 
     # Update the voice channel name
-    print("Updating voice channel for %s?: %s, %s" %
-          (serverData.name, serverConfig.has_voice_channel(),
-           serverData.allows_channel_rename()))
     if serverConfig.has_voice_channel() and serverData.allows_channel_rename():
       try:
         serverData.update_channel_rename_timestamp()
