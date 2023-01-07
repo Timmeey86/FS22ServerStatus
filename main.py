@@ -138,21 +138,21 @@ async def fss_enable_member_log(interaction, ip: str, port: str):
   db["servers"][server.identifier] = vars(server)
 
 
-@client.event
-async def on_ready():
-  """
-  Tells us when the bot is logged in to discord (in the replit console)
-  """
+@tree.command(
+  name="fss_set_status_channel",
+  description="Registers the current channel for status messages of the bot",
+  guild=discord.Object(id=MY_GUILD))
+@app_commands.describe()
+async def fss_set_status_channel(interaction):
+  if not interaction.permissions.administrator:
+    await interaction.response.send_message(
+      "Only administrators are allowed to run commands on this bot")
+    return
 
-  # Enable slash commands like /fss_add
-  await tree.sync(guild=discord.Object(id=MY_GUILD))
-
-  # Scan servers regulary
-  client.loop.create_task(update_status_embeds())
-
-  # Let us know the bot is ready
-  print("Ready")
-  print(client.user)
+  db["statuschannel"] = interaction.channel_id
+  statusChannel = interaction.channel_id
+  await interaction.response.send_message(
+    content="Successfully set this channel for bot status messages")
 
 
 @tree.command(
@@ -228,7 +228,8 @@ async def update_status_embeds():
         replyMessage = replyMessage + "(none)"
       else:
         for playerName in serverData.players:
-          replyMessage = replyMessage + "\r\n- " + playerName
+          replyMessage = replyMessage + "%s (%s min)\r\n- " % (
+            playerName, serverData.players[playerName].onlineTime)
 
       # Update the embed
       embed = discord.Embed(title=serverData.name, description=replyMessage)
@@ -271,7 +272,7 @@ async def get_server_status():
       allServersData.append(serverData)
       continue
 
-    # Check if the server is offline (but the host is online. In this case we get an empty XML):    
+    # Check if the server is offline (but the host is online. In this case we get an empty XML):
     serverElement = data["Server"]
     justTurnedOffline = False
     justTurnedOnline = False
@@ -289,7 +290,7 @@ async def get_server_status():
         name=serverElement["@name"],
         map=serverElement["@mapName"],
         maxPlayers=serverElement["Slots"]["@capacity"])
-  
+
       serverData.update_players(serverElement["Slots"]["Player"])
 
     if serverConfig.has_member_log_channel():
@@ -302,7 +303,7 @@ async def get_server_status():
       print("Server %s is now online" % serverData.name)
       if channel is not None:
         await channel.send(content="🟢 %s is now online" % serverData.name)
-      
+
     # Send a message to discord for every recently logged in player
     for playerStatus in serverData.recentlyLoggedIn:
       print("Player %s is now online on %s" %
@@ -326,7 +327,7 @@ async def get_server_status():
       if channel is not None:
         await channel.send(content="%s is now an admin on %s" %
                            (playerStatus.playerName, serverData.name))
-        
+
     # Send a message if the server just went offline (after the player list)
     if justTurnedOffline:
       print("Server %s is now offline" % serverData.name)
@@ -353,6 +354,27 @@ async def get_server_status():
   return allServersData
 
 
+@client.event
+async def on_ready():
+  """
+  Tells us when the bot is logged in to discord (in the replit console)
+  """
+
+  # Enable slash commands like /fss_add
+  await tree.sync(guild=discord.Object(id=MY_GUILD))
+
+  # Scan servers regulary
+  client.loop.create_task(update_status_embeds())
+
+  if (statusChannelId is not None):
+    statusChannel = client.get_channel(statusChannelId)
+    await statusChannel.send(content="Bot is now active")
+
+  # Let us know the bot is ready
+  print("Ready")
+  print(client.user)
+
+
 # Build a ditionary of server configuration objects from the database
 if db.get("servers") == None:
   db["servers"] = {}
@@ -369,6 +391,9 @@ serverStatus = {}
 for serverIdentifier in serverConfigs:
   serverStatus[serverIdentifier] = ServerStatus(
     serverConfigs[serverIdentifier])
+
+statusChannelId = db.get("statuschannel")
+statusChannel = None
 
 # Run the bot
 discord_token = os.environ['DISCORD_TOKEN']

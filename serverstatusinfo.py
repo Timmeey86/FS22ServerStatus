@@ -23,7 +23,7 @@ class ServerStatus:
   """
 
   def __init__(self, serverConfig):
-    self.status = "Offline"
+    self.status = "Online"
     self.serverConfig = serverConfig
     self.name = "Unknown"
     self.map = "Unknown"
