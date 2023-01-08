@@ -254,44 +254,48 @@ async def get_server_status():
     serverConfig = serverConfigs[identifier]
     serverData = serverStatus[identifier]
 
+    justTurnedOffline = False
+    justTurnedOnline = False
+
     # Retrieve the server XML
     try:
       url = serverData.status_xml_url()
       response = http.request('GET', url, timeout=urllib3.util.Timeout(2))
-    except:
-      print("Failed connecting to %s" % url)
-      serverData.set_offline()
-      allServersData.append(serverData)
-      continue
+      # Parse data from the server XML
+      try:
+        data = xmltodict.parse(response.data)
 
-    # Parse data from the server XML
-    try:
-      data = xmltodict.parse(response.data)
-    except:
-      print("Failed parsing XML data from %s" % url)
-      allServersData.append(serverData)
-      continue
+        try:
+          # Check if the server is offline (but the host is online. In this case we get an empty XML):
+          serverElement = data["Server"]
+          if "@name" not in serverElement:
+            if serverData.is_online():
+              justTurnedOffline = True
+            serverData.set_offline()
+            serverData.update_players([])
+          else:
+            if not serverData.is_online():
+              justTurnedOnline = True
+            # Update the cache with the status values
+            serverData.update_attributes(
+              status="Online",
+              name=serverElement["@name"],
+              map=serverElement["@mapName"],
+              maxPlayers=serverElement["Slots"]["@capacity"])
 
-    # Check if the server is offline (but the host is online. In this case we get an empty XML):
-    serverElement = data["Server"]
-    justTurnedOffline = False
-    justTurnedOnline = False
-    if "@name" not in serverElement:
+            serverData.update_players(serverElement["Slots"]["Player"])
+        except:
+          print("Failed updating online state from XML")
+          continue
+      except:
+        print("Failed parsing XML data from %s" % url)
+        allServersData.append(serverData)
+        continue
+    except:
       if serverData.is_online():
         justTurnedOffline = True
       serverData.set_offline()
-      serverData.update_players([])
-    else:
-      if not serverData.is_online():
-        justTurnedOnline = True
-      # Update the cache with the status values
-      serverData.update_attributes(
-        status="Online",
-        name=serverElement["@name"],
-        map=serverElement["@mapName"],
-        maxPlayers=serverElement["Slots"]["@capacity"])
-
-      serverData.update_players(serverElement["Slots"]["Player"])
+      allServersData.append(serverData)
 
     if serverConfig.has_member_log_channel():
       channel = client.get_channel(serverConfig.memberLogChannelId)
