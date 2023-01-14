@@ -1,9 +1,10 @@
 class ServerConfiguration:
 
-  def __init__(self, ip, port, apiCode):
+  def __init__(self, ip, port, apiCode, color):
     self.ip = ip
     self.port = port
     self.apiCode = apiCode
+    self.color = color
     self.identifier = ServerConfiguration.build_identifier(ip, port)
     self.statusChannelId = None
     self.statusEmbedId = None
@@ -37,8 +38,9 @@ class ServerConfiguration:
 
   @staticmethod
   def from_json(j):
-    cfg = ServerConfiguration(j["ip"], j["port"], j["apiCode"])
+    cfg = ServerConfiguration(j["ip"], j["port"], j["apiCode"], j["color"])
     cfg.set_status_embed(j["statusChannelId"], j["statusEmbedId"])
     cfg.set_member_log_channel(j["memberLogChannelId"])
     cfg.set_voice_channel(j.get("voiceChannelId"),j.get("voiceChannelName"))
+    cfg.flag = j.get("flag", "")
     return cfg

@@ -16,6 +16,10 @@ class PlayerStatus:
     return cls(playerElement["#text"], playerElement["@uptime"],
                playerElement["@isAdmin"])
 
+  @staticmethod
+  def from_json(j):
+    return PlayerStatus(j["playerName"], j["onlineTime"], j["isAdmin"])
+
 
 class ServerStatus:
   """
@@ -96,9 +100,33 @@ class ServerStatus:
 
   def mods_link(self):
     """Retrieves the link to the mods page"""
-    return "%s:%s/mods.html" % (self.serverConfig.ip, self.serverConfig.port)
+    return "http://%s:%s/mods.html" % (self.serverConfig.ip,
+                                       self.serverConfig.port)
 
   def status_xml_url(self):
     """Retrieves the URL to the XML file which provides status information about the server"""
     return "http://%s:%s/feed/dedicated-server-stats.xml?code=%s" % (
       self.serverConfig.ip, self.serverConfig.port, self.serverConfig.apiCode)
+
+  def to_json(self):
+    j = {}
+    j["status"] = self.status
+    j["name"] = self.name
+    j["map"] = self.map
+    j["maxPlayers"] = self.maxPlayers
+    j["players"] = {}
+    for playerName in self.players:
+      j["players"][playerName] = vars(self.players[playerName])
+
+    return j
+
+  @staticmethod
+  def from_json(j, serverConfig):
+    ss = ServerStatus(serverConfig)
+    ss.status = j["status"]
+    ss.name = j["name"]
+    ss.map = j["map"]
+    ss.maxPlayers = j["maxPlayers"]
+    for playerName in j["players"]:
+      ss.players[playerName] = PlayerStatus.from_json(j["players"][playerName])
+    return ss
