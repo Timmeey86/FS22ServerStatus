@@ -16,6 +16,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+firstStart = True
 
 MY_GUILD = 1012809878701613157
 
@@ -24,11 +25,11 @@ MY_GUILD = 1012809878701613157
 @tree.command(name="fss_add",
               description="Adds an embed for a new server to this channel",
               guild=discord.Object(id=MY_GUILD))
-@app_commands.describe(ip="The IP of the FS22 server",
-                       port="The port of the FS22 server",
-                       code="The API token required for accessing the XML file",
-                       color="The color code which identifies the server, like 992D22"
-                       )
+@app_commands.describe(
+  ip="The IP of the FS22 server",
+  port="The port of the FS22 server",
+  code="The API token required for accessing the XML file",
+  color="The color code which identifies the server, like 992D22")
 async def fss_add(interaction, ip: str, port: str, code: str, color: str):
 
   if not interaction.permissions.administrator:
@@ -44,7 +45,8 @@ async def fss_add(interaction, ip: str, port: str, code: str, color: str):
     return
 
   # Create an embed and remember its details
-  embed = discord.Embed(title="Pending...",color=int(new_server_config.color, 16))
+  embed = discord.Embed(title="Pending...",
+                        color=int(new_server_config.color, 16))
   message = await interaction.channel.send(embed=embed)
   new_server_config.set_status_embed(message.channel.id, message.id)
 
@@ -206,9 +208,7 @@ async def update_status_embeds():
   await client.wait_until_ready()
   while not client.is_closed():
     try:
-      print("Getting server status")
       serverStatus = await get_server_status()
-      print("Updating status embeds")
       for serverData in serverStatus:
         serverConfig = serverData.serverConfig
 
@@ -238,7 +238,9 @@ async def update_status_embeds():
               playerName, serverData.players[playerName].onlineTime)
 
         # Update the embed
-        embed = discord.Embed(title=serverData.name, description=replyMessage, color=int(serverConfig.color,16))
+        embed = discord.Embed(title=serverData.name,
+                              description=replyMessage,
+                              color=int(serverConfig.color, 16))
         embed.add_field(name="Last Update",
                         value="%s" % datetime.datetime.now())
         await embedMessage.edit(embed=embed)
@@ -259,6 +261,7 @@ async def get_server_status():
   """
   Retrieves the server status from each server
   """
+  global firstStart
   http = urllib3.PoolManager()
 
   allServersData = []
@@ -266,8 +269,8 @@ async def get_server_status():
     serverConfig = serverConfigs[identifier]
     serverData = serverStatus[identifier]
 
-    justTurnedOffline = False
-    justTurnedOnline = False
+    serverTurnedOffline = False
+    serverTurnedOnline = False
 
     # Retrieve the server XML
     try:
@@ -282,12 +285,12 @@ async def get_server_status():
           serverElement = data["Server"]
           if "@name" not in serverElement:
             if serverData.is_online():
-              justTurnedOffline = True
+              serverTurnedOffline = True
             serverData.set_offline()
             serverData.update_players([])
           else:
             if not serverData.is_online():
-              justTurnedOnline = True
+              serverTurnedOnline = True
             # Update the cache with the status values
             serverData.update_attributes(
               status="Online",
@@ -296,8 +299,12 @@ async def get_server_status():
               maxPlayers=serverElement["Slots"]["@capacity"])
 
             serverData.update_players(serverElement["Slots"]["Player"])
+
+            # Update the database
+            db["serverStatus"][serverConfig.identifier] = serverData.to_json()
         except:
-          print("Failed updating online state from XML: %s" % traceback.format_exc())
+          print("Failed updating online state from XML: %s" %
+                traceback.format_exc())
           continue
       except:
         print("Failed parsing XML data from %s" % url)
@@ -305,7 +312,7 @@ async def get_server_status():
         continue
     except:
       if serverData.is_online():
-        justTurnedOffline = True
+        serverTurnedOffline = True
       serverData.set_offline()
       allServersData.append(serverData)
 
@@ -321,10 +328,12 @@ async def get_server_status():
 
     color = int(serverConfig.color, 16)
     # Send a message if the server just went online (before the player list)
-    if justTurnedOnline:
+    if serverTurnedOnline:
       print("Server %s is now online" % serverData.name)
-      if channel is not None:        
-        embed = discord.Embed(description="🟢 **%s** is now online" % serverData.name, color=color)
+      if channel is not None:
+        embed = discord.Embed(description="🟢 **%s** is now online" %
+                              serverData.name,
+                              color=color)
         message = await channel.send(embed=embed)
 
     # Send a message to discord for every recently logged out player
@@ -332,15 +341,19 @@ async def get_server_status():
       print("%s is no longer on %s" %
             (playerStatus.playerName, serverData.name))
       if channel is not None:
-        embed = discord.Embed(description="👋 **%s** is no longer on **%s**" % (playerStatus.playerName, serverData.name), color=discord.Colour.dark_red())
+        embed = discord.Embed(description="👋 **%s** is no longer on **%s**" %
+                              (playerStatus.playerName, serverData.name),
+                              color=discord.Colour.dark_red())
         message = await channel.send(embed=embed)
-        
+
     # Send a message to discord for every recently logged in player
     for playerStatus in serverData.recentlyLoggedIn:
       print("%s is now online on %s" %
             (playerStatus.playerName, serverData.name))
       if channel is not None:
-        embed = discord.Embed(description="👤 **%s** is now online on **%s**" % (playerStatus.playerName, serverData.name), color=color) 
+        embed = discord.Embed(description="👤 **%s** is now online on **%s**" %
+                              (playerStatus.playerName, serverData.name),
+                              color=color)
         message = await channel.send(embed=embed)
 
     # Send a message to discord for every player who recently changed to admin
@@ -348,20 +361,27 @@ async def get_server_status():
       print("%s is now an admin on %s" %
             (playerStatus.playerName, serverData.name))
       if channel is not None:
-        embed = discord.Embed(description="🎩 **%s** is now an admin on **%s**" %                            (playerStatus.playerName, serverData.name), color=color)
+        embed = discord.Embed(
+          description="🎩 **%s** is now an admin on **%s**" %
+          (playerStatus.playerName, serverData.name),
+          color=color)
         message = await channel.send(embed=embed)
 
     # Send a message if the server just went offline (after the player list)
-    if justTurnedOffline:
+    if serverTurnedOffline:
       print("Server %s is now offline" % serverData.name)
       if channel is not None:
-        embed = discord.Embed(description="🔴 **%s** is now offline" % serverData.name, color=color)
+        embed = discord.Embed(description="🔴 **%s** is now offline" %
+                              serverData.name,
+                              color=color)
         message = await channel.send(embed=embed)
 
     # Update the voice channel name
-    if serverConfig.has_voice_channel() and serverData.allows_channel_rename():
+    if serverConfig.has_voice_channel() and serverData.allows_channel_rename(
+    ) and (len(serverData.recentlyLoggedOut) > 0
+           or len(serverData.recentlyLoggedIn) > 0 or serverTurnedOffline
+           or serverTurnedOnline or firstStart):
       try:
-        print("Updating voice channel name")
         serverData.update_channel_rename_timestamp()
         voiceChannel = client.get_channel(int(serverConfig.voiceChannelId))
         onlineSign = "🟢" if serverData.is_online() else "🔴"
@@ -373,9 +393,11 @@ async def get_server_status():
         print(
           "WARN: Could not locate or change voice channel %s for server %s" %
           (serverConfig.voiceChannelId, serverData.name))
+        print(traceback.format_exc())
 
     allServersData.append(serverData)
 
+  firstStart = False
   return allServersData
 
 
@@ -392,13 +414,12 @@ async def on_ready():
     statusChannel = client.get_channel(statusChannelId)
 
     if db["recovery"] == True:
-      await statusChannel.send(
-        content="Bot successfully recovered from Cloudflare issue")
-      print("Bot successfully recovered")
+      await statusChannel.send(content="Bot recovered from exception")
+      print("Bot recovered from exception")
       db["recovery"] = False
     else:
-      await statusChannel.send(content="Bot was started manually")
-      print("Bot was started manually")
+      await statusChannel.send(content="Bot was restarted")
+      print("Bot was restarted")
 
   # Scan servers regulary
   client.loop.create_task(update_status_embeds())
@@ -415,11 +436,24 @@ for serverIdentifier in serversInDb:
   serverObj = ServerConfiguration.from_json(serverJson)
   serverConfigs[serverObj.identifier] = serverObj
 
-# Keep status info only in cache for now
 serverStatus = {}
-for serverIdentifier in serverConfigs:
-  serverStatus[serverIdentifier] = ServerStatus(
-    serverConfigs[serverIdentifier])
+if db.get("serverStatus") == None:
+  db["serverStatus"] = {}
+  for serverIdentifier in serverConfigs:
+    db["serverStatus"][serverIdentifier] = ServerStatus(
+      serverConfigs[serverIdentifier]).to_json()
+
+serverStatusInDb = db["serverStatus"]
+for serverIdentifier in serversInDb:
+  if serverStatusInDb.get(serverIdentifier):
+    serverStatus[serverIdentifier] = ServerStatus.from_json(
+      serverStatusInDb[serverIdentifier], serverConfigs[serverIdentifier])
+    print("Restored server status for %s" %
+          serverStatus[serverIdentifier].name)
+  else:
+    serverStatus[serverIdentifier] = ServerStatus(
+      serverConfigs[serverIdentifier])
+    print("No status stored for server identifier %s" % serverIdentifier)
 
 statusChannelId = db.get("statuschannel")
 statusChannel = None
